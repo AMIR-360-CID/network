@@ -5,6 +5,7 @@ import { calculateRemaining, calculateStatus, formatCurrency } from '../utils/cu
 import { notifyPayment } from '../utils/telegram'
 import AddSubscriberModal from './AddSubscriberModal'
 import PaymentModal from './PaymentModal'
+import EditSubscriberModal from './EditSubscriberModal'
 import UndoButton from './UndoButton'
 
 export default function Dashboard() {
@@ -16,7 +17,9 @@ export default function Dashboard() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [showAddModal, setShowAddModal] = useState(false)
   const [paymentSubscriber, setPaymentSubscriber] = useState(null)
+  const [editSubscriber, setEditSubscriber] = useState(null)
   const [lastAction, setLastAction] = useState(null)
+  const [lastPayments, setLastPayments] = useState({})
 
   const fetchSubscribers = useCallback(async () => {
     setLoading(true)
@@ -31,6 +34,21 @@ export default function Dashboard() {
       if (fetchError) throw fetchError
 
       setSubscribers(data || [])
+
+      const { data: payments } = await supabase
+        .from('payment_history')
+        .select('subscriber_id, received_at')
+        .order('received_at', { ascending: false })
+
+      if (payments) {
+        const latest = {}
+        for (const p of payments) {
+          if (!latest[p.subscriber_id]) {
+            latest[p.subscriber_id] = p.received_at
+          }
+        }
+        setLastPayments(latest)
+      }
     } catch (err) {
       setError('فشل في جلب بيانات المشتركين: ' + err.message)
     }
@@ -122,13 +140,26 @@ export default function Dashboard() {
     setSubscribers((prev) =>
       prev.map((s) => (s.id === updated.id ? updated : s))
     )
-    // The PaymentModal keeps its own copy of the subscriber via the
-    // `paymentSubscriber` prop, which this list update alone would not
-    // refresh. Without this, a second payment made in the same modal
-    // session would compute its "paid so far" from stale data.
     setPaymentSubscriber((prev) =>
       prev && prev.id === updated.id ? updated : prev
     )
+  }
+
+  const handleEditComplete = async (updated) => {
+    setSubscribers((prev) =>
+      prev.map((s) => (s.id === updated.id ? updated : s))
+    )
+    const { data: payments } = await supabase
+      .from('payment_history')
+      .select('subscriber_id, received_at')
+      .eq('subscriber_id', updated.id)
+      .order('received_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    setLastPayments((prev) => ({
+      ...prev,
+      [updated.id]: payments?.received_at || null,
+    }))
   }
 
   const filtered = subscribers.filter((s) => {
@@ -213,7 +244,7 @@ export default function Dashboard() {
               </select>
             </div>
 
-            {canEdit && (
+            {isAdmin && (
               <button
                 onClick={() => setShowAddModal(true)}
                 className="flex items-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-xl transition-all shadow-lg shadow-primary-600/20 text-sm whitespace-nowrap"
@@ -253,6 +284,7 @@ export default function Dashboard() {
                     <th className="text-right px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wider hidden sm:table-cell">المدفوع</th>
                     <th className="text-right px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wider">المتبقي</th>
                     <th className="text-right px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wider">الحالة</th>
+                    <th className="text-right px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wider hidden lg:table-cell">وقت التسديد</th>
                     <th className="text-right px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wider">إجراءات</th>
                   </tr>
                 </thead>
@@ -279,15 +311,21 @@ export default function Dashboard() {
                             {config.label}
                           </span>
                         </td>
+                        <td className="px-4 py-3 text-sm text-slate-400 hidden lg:table-cell">
+                          {lastPayments[subscriber.id]
+                            ? new Date(lastPayments[subscriber.id]).toLocaleString('ar')
+                            : '—'}
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
-                            {canPay && remaining > 0 && (
+                            {canEdit && (
                               <button
                                 onClick={() => handleQuickPay(subscriber)}
-                                className="px-3 py-1.5 bg-success-600 hover:bg-success-700 text-white text-xs font-medium rounded-lg transition-all whitespace-nowrap"
-                                title="تسديد المبلغ كاملاً"
+                                disabled={remaining <= 0}
+                                className="px-3 py-1.5 bg-success-600 hover:bg-success-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-all whitespace-nowrap"
+                                title={remaining > 0 ? 'تسديد المبلغ كاملاً' : 'لا يوجد مبلغ متبقي'}
                               >
-                                تسديد كامل
+                                تسديد
                               </button>
                             )}
                             {canEdit && (
@@ -295,6 +333,17 @@ export default function Dashboard() {
                                 onClick={() => setPaymentSubscriber(subscriber)}
                                 className="p-1.5 bg-primary-600/20 hover:bg-primary-600/30 text-primary-300 rounded-lg transition-all"
                                 title="تفاصيل الدفع"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                            )}
+                            {canEdit && (
+                              <button
+                                onClick={() => setEditSubscriber(subscriber)}
+                                className="p-1.5 bg-warning-500/10 hover:bg-warning-500/20 text-warning-400 rounded-lg transition-all"
+                                title="تعديل بيانات المشترك"
                               >
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -341,7 +390,18 @@ export default function Dashboard() {
         />
       )}
 
+      {editSubscriber && (
+        <EditSubscriberModal
+          subscriber={editSubscriber}
+          onClose={() => setEditSubscriber(null)}
+          onUpdated={handleEditComplete}
+        />
+      )}
+
       <UndoButton lastAction={lastAction} onUndoComplete={handleUndoComplete} />
     </div>
   )
 }
+
+
+export default Dashboard

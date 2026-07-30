@@ -82,6 +82,7 @@ export function AuthProvider({ children }) {
     canManageUsers: isAdmin,
     canEdit: isAdmin || isDataEntry,
     canPay: isAdmin || isDataEntry,
+    canAdd: isAdmin,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
